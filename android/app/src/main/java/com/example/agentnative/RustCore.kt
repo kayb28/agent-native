@@ -8,6 +8,12 @@ package com.example.agentnative
  * Java_com_example_agentnative_RustCore_processQuery) y Gradle lo empaqueta
  * desde android/app/src/main/jniLibs/<abi>/libagent_core.so
  * (los .so los genera scripts/build_rust_android.sh durante el build de CI).
+ *
+ * @param input      consulta del usuario.
+ * @param apiBaseUrl URL base de la API del agente (p. ej. "https://preview-xxx.space-z.ai").
+ *                   Si llega vacía, Rust usa el backend simulado del MVP.
+ * @param apiToken   token compartido (X-Agent-Token); NO se guarda en el código,
+ *                   solo en las preferencias del dispositivo.
  */
 object RustCore {
     init {
@@ -15,5 +21,5 @@ object RustCore {
         System.loadLibrary("agent_core")
     }
 
-    external fun processQuery(input: String): String
+    external fun processQuery(input: String, apiBaseUrl: String, apiToken: String): String
 }

@@ -21,11 +21,17 @@ Cliente Android **nativo** (Kotlin + Jetpack Compose) con núcleo de lógica en 
        ▼
 ┌─────────────────────────── Rust (libagent_core.so) ───────────────┐
 │  jni_bridge.rs  Java_com_example_agentnative_RustCore_processQuery│
-│      ▼                                                            │
-│  agent.rs   AgentCore::run(input) -> JSON String                  │
-│      │  SimulatedBackend (MVP)                                    │
-│      │  ── PUNTO DE EXTENSIÓN: trait AgentBackend ──              │
-│      │  ApiBackend (futuro) → POST /api/agent/run                 │
+│         │ input + apiBaseUrl + apiToken                            │
+│         ▼                          si URL vacía                   │
+│  agent.rs   AgentCore::run(input) ─────────► SimulatedBackend     │
+│         │  ── trait AgentBackend ──                               │
+│         ▼                                                         │
+│  ApiBackend → POST {base}/api/agent/run  (reqwest + rustls)       │
+└─────────┬─────────────────────────────────────────────────────────┘
+          │ HTTPS (header X-Agent-Token)
+          ▼
+┌─────────────────── Servidor (Next.js + GLM) ──────────────────────┐
+│  /api/agent/run  { query } → modelo GLM → { status, result }      │
 └───────────────────────────────────────────────────────────────────┘
 ```
 
@@ -115,22 +121,40 @@ El workflow `.github/workflows/android-rust-build.yml` se ejecuta en **push a `m
 - **Nombre del artifact:** `agent-native-debug-apk`
 - **Dónde descargarlo:** pestaña *Actions* → run correspondiente → sección *Artifacts* → `agent-native-debug-apk`. Dentro viene `app-debug.apk`, instalable directamente (`Desconocidos / Instalar app` en el teléfono).
 
-## Conectar el agente real (Fase 5)
+## Conectar con la API del agente (Fase 5 — HECHA)
 
-El único sitio que cambia es **`rust-core/src/agent.rs`**:
+La app ya no queda en la respuesta simulada: **Rust llama a una API real desplegada**
+(Next.js en el sandbox con el modelo GLM vía `z-ai-web-dev-sdk`, nunca en cliente).
 
-1. Añade un backend nuevo que implemente el trait `AgentBackend`, por ejemplo
-   `ApiBackend { base_url: String }`, con `reqwest` (bloqueante o con `tokio`) + `rustls`:
-   - Petición: `POST {base_url}/api/agent/run` con cuerpo `{"query": "..."}`.
-   - Respuesta esperada: `{"status": "ok", "result": "..."}`.
-2. En `rust-core/src/jni_bridge.rs` cambia `SimulatedBackend` por `ApiBackend`
-   (una sola línea; el contrato JSON hacia Kotlin no cambia).
-3. La URL base **no va hardcodeada**: léela de una variable de entorno en CI o de
-   `local.properties`/`BuildConfig` en la app; nunca de secretos en el código.
-4. Maneja errores de red devolviendo el JSON de error estándar
-   (`{"status":"error","engine":"rust","message":"...","input":"..."}`), que la UI ya sabe pintar.
+**Configuración en la app** (botón «Ajustes», guardada con `SharedPreferences`, nada va en el código):
 
-Mientras no exista una API del agente, el MVP queda con `SimulatedBackend`.
+- **URL de la API**: la base del servidor, p. ej. `https://preview-xxxx.space-z.ai` (sin `/api` final).
+- **Token**: se envía como header `X-Agent-Token`; el servidor lo valida contra su `.env.local`.
+- Si la URL está vacía, Rust cae al `SimulatedBackend` (respuesta simulada, sin red).
+
+**Contrato** (`src/app/api/agent/run/route.ts` del proyecto web ↔ `rust-core/src/agent.rs::ApiBackend`):
+
+```http
+POST {base_url}/api/agent/run
+X-Agent-Token: <token>
+{"query": "tu consulta"}          // opcional: "history" (últimos 10 turnos)
+
+→ 200 {"status":"ok","result":"...","engine":"glm"}
+→ 400/401/500 {"status":"error","message":"legible"}
+```
+
+Los errores de red, timeout (90 s) y respuestas inválidas se traducen en Rust a
+mensajes legibles (`AgentError::Api`) que la UI pinta en rojo.
+
+**Límites actuales**: el servidor vive en el sandbox de preview (si duerme, la app
+muestra «no se pudo conectar» — reabre el preview y reintenta); cada conversación
+empieza limpia (sin memoria de esta sesión); la API no tiene acceso a tus archivos.
+
+### Siguiente evolución
+
+1. **Memoria de conversación**: enviar `history` desde la app (la API ya lo acepta).
+2. **Ajustes adicionales**: system prompt configurable, modo thinking.
+3. **Servidor propio**: migrar la API a un dominio fijo para no depender del sandbox.
 
 ## Decisiones técnicas
 
@@ -144,6 +168,10 @@ Mientras no exista una API del agente, el MVP queda con `SimulatedBackend`.
 | `jni` crate | 0.21 | La que pide el prompt; API probada (`get_string`/`new_string`) |
 | `crate-type` | `["cdylib", "rlib"]` | Desviación documentada: `cdylib` solo no permite `cargo test`; con `rlib` los tests corren en escritorio |
 | Dep `jni` | `cfg(target_os="android")` | El puente JNI no se compila en escritorio; `cargo test` solo prueba lógica pura |
+| HTTP desde Rust | `reqwest` blocking + `rustls-tls` | TLS puro-Rust (sin OpenSSL/NDK C); llamada bloqueante porque ya corre en `Dispatchers.IO` |
+| `ring` (TLS) | se compila solo en CI | Necesita el clang del NDK; en local sin NDK solo se puede `cargo test` + check lógico |
+| Config API | `SharedPreferences` en la app | URL y token editables en «Ajustes»; cero secretos en el código (exigido por el prompt) |
+| ViewModel | `AndroidViewModel` | Necesario para leer/guardar la config sin pasarlo por la UI |
 | ABIs | arm64-v8a + x86_64 + armeabi-v7a | Las dos priorizadas por el prompt + armv7 «si es fácil» (un flag más de cargo-ndk) |
 | `.so` versionados | No | Se generan en CI; evita binarios grandes en el repo |
 | Iconos | Adaptive icon (v26) + PNG por densidad | Fallback real para minSdk 24–25 |
@@ -151,9 +179,9 @@ Mientras no exista una API del agente, el MVP queda con `SimulatedBackend`.
 
 ## Próximos pasos
 
-1. **Fase 5 — Agente real:** implementar `ApiBackend` (contrato en la sección anterior) y decidir dónde vive la URL/secreto (`local.properties` o GitHub Secrets).
+1. **Memoria de conversación**: mandar `history` desde la app (la API ya lo acepta).
 2. **Splits por ABI:** `splits { abi { ... } }` en Gradle para APKs por arquitectura (APK final más pequeño).
 3. **Firma release:** keystore en GitHub Secrets + `signingConfig` para APK release instalables sin advertencia.
 4. **Tests de UI:** Compose UI test del flujo TextField → botón → respuesta.
 5. **CI más rápida:** cachear también la instalación de `cargo-ndk` (hoy se recompila en cada run, ~2 min).
-6. **Telemetría ligera:** log de latencia y errores de `processQuery` para medir el agente real.
+6. **Servidor propio:** dominio fijo + HTTPS real para no depender del sandbox de preview.
