@@ -146,6 +146,11 @@ X-Agent-Token: <token>
 Los errores de red, timeout (90 s) y respuestas inválidas se traducen en Rust a
 mensajes legibles (`AgentError::Api`) que la UI pinta en rojo.
 
+**Fix v2 del APK**: el primer APK con conexión API no traía el permiso
+`android.permission.INTERNET` en el manifest, así que toda llamada fallaba con
+«no se pudo conectar». Instala la build v2 o posterior (el permiso ya está
+declarado en `AndroidManifest.xml`).
+
 **Límites actuales**: el servidor vive en el sandbox de preview (si duerme, la app
 muestra «no se pudo conectar» — reabre el preview y reintenta); cada conversación
 empieza limpia (sin memoria de esta sesión); la API no tiene acceso a tus archivos.
