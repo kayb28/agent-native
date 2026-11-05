@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Glifo: prompt de terminal ">_" (chevron + barra), en blanco. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M36,30 L68,54 L36,78 L48,54 Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M54,70 L78,70 L78,78 L54,78 Z" />
+</vector>

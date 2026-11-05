@@ -1,0 +1,22 @@
+[package]
+name = "agent_core"
+version = "0.1.0"
+edition = "2021"
+description = "Núcleo Rust de AgentNative: lógica del agente expuesta a Kotlin vía JNI"
+license = "MIT"
+
+[lib]
+# cdylib  -> libagent_core.so (la librería dinámica que Android carga por JNI).
+# rlib    -> permite `cargo test` en escritorio (el puente JNI queda excluido de esa compilación).
+#            Desviación menor del prompt original (que pedía solo cdylib); es necesaria
+#            para que el criterio de aceptación nº1 (`cargo test` verde) funcione.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# La dependencia jni solo se compila cuando el destino es Android
+# (el módulo jni_bridge está protegido con el mismo cfg).
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"

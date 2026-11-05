@@ -1,0 +1,17 @@
+# --- Rust ---
+rust-core/target/
+
+# --- Android: binarios y cachés generados ---
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+*.iml
+
+# Los .so NO se versionan: los genera scripts/build_rust_android.sh (local o CI).
+android/app/src/main/jniLibs/
+
+# --- Varios ---
+.DS_Store
+*.log
