@@ -37,10 +37,11 @@ if [ "$MISSING" -lt 3 ]; then
 fi
 
 # Compilar (release) los tres ABIs y volcar los .so directamente a jniLibs.
+# Nota: cargo-ndk >= 4 exige el nombre completo 'armeabi-v7a' (el alias 'arm' ya no vale).
 cargo ndk \
     -t arm64-v8a \
     -t x86_64 \
-    -t arm \
+    -t armeabi-v7a \
     -o ../android/app/src/main/jniLibs \
     build --release
 
