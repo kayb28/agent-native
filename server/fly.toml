@@ -1,0 +1,25 @@
+# Fly.io config para agent-native-api.
+# Generado a mano; `fly launch` también creará uno similar.
+
+app = "agent-native-api"
+primary_region = "gru"  # São Paulo; cámbialo a la región más cercana a tus usuarios
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false   # mantener warm; si quieres free tier, pon true
+  auto_start_machines = true
+  min_machines_running = 1     # al menos una instancia always-on
+
+[http_service.concurrency]
+  type = "requests"
+  soft_limit = 50
+  hard_limit = 100
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 256

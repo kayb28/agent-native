@@ -1,6 +1,39 @@
 //! Lógica del agente y PUNTO DE EXTENSIÓN para conectar el backend real.
+//!
+//! Soporta memoria de conversación: cada llamada puede llevar un `history`
+//! (`Vec<ChatMessage>`) que la API reenvía al modelo GLM como contexto.
 
 use serde::{Deserialize, Serialize};
+
+/// Un mensaje del historial de conversación.
+///
+/// `role` es `"user"` o `"assistant"`. Cualquier otro valor se descarta
+/// al construir el body o al parsear JSON entrante (ver [`parse_history_json`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
+impl ChatMessage {
+    pub fn user(content: impl Into<String>) -> Self {
+        Self {
+            role: "user".to_string(),
+            content: content.into(),
+        }
+    }
+    pub fn assistant(content: impl Into<String>) -> Self {
+        Self {
+            role: "assistant".to_string(),
+            content: content.into(),
+        }
+    }
+
+    /// `true` si el rol es uno de los aceptados por la API.
+    pub fn is_valid_role(&self) -> bool {
+        self.role == "user" || self.role == "assistant"
+    }
+}
 
 /// Respuesta estándar del núcleo hacia Android (se serializa a JSON).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -43,22 +76,27 @@ impl AgentError {
 /// Todo el comportamiento futuro se implementa como una nueva
 /// implementación de este trait, sin tocar JNI ni la app Android:
 ///
-/// - `SimulatedBackend` (MVP actual): respuesta simulada, sin red.
-/// - `ApiBackend` (futuro): llamada HTTP a `POST {base_url}/api/agent/run`
-///   con cuerpo `{ "query": "..." }` y respuesta `{ "status": "ok", "result": "..." }`.
-///   (Se implementaría con `reqwest` + `rustls`; pedirlo en la siguiente fase.)
-/// - También podría envolver: ejecución de tareas, procesamiento de datos,
-///   inferencia local, o comunicación con el backend actual.
+/// - `SimulatedBackend`: respuesta simulada, sin red (ignora el historial).
+/// - `ApiBackend`: llamada HTTP a `POST {base_url}/api/agent/run` con
+///   cuerpo `{ "query": "...", "history": [...] }` (ver [`build_request_body`]).
 /// ------------------------------------------------------------------
 pub trait AgentBackend {
-    fn process(&self, input: &str) -> Result<AgentResponse, AgentError>;
+    fn process(
+        &self,
+        input: &str,
+        history: &[ChatMessage],
+    ) -> Result<AgentResponse, AgentError>;
 }
 
-/// Backend simulado del MVP: sin red, sin estado.
+/// Backend simulado: sin red, sin estado. Ignora el historial.
 pub struct SimulatedBackend;
 
 impl AgentBackend for SimulatedBackend {
-    fn process(&self, input: &str) -> Result<AgentResponse, AgentError> {
+    fn process(
+        &self,
+        input: &str,
+        _history: &[ChatMessage],
+    ) -> Result<AgentResponse, AgentError> {
         let trimmed = input.trim();
         if trimmed.is_empty() {
             return Err(AgentError::EmptyInput);
@@ -77,7 +115,7 @@ impl AgentBackend for SimulatedBackend {
 ///
 /// Contrato (ver src/app/api/agent/run/route.ts del proyecto web):
 ///   POST {base_url}/api/agent/run   header X-Agent-Token: <token>
-///   body   { "query": "..." }
+///   body   { "query": "...", "history": [{ "role": "user"|"assistant", "content": "..." }] }
 ///   ok     { "status": "ok", "result": "...", "engine": "glm" }
 ///   error  { "status": "error", "message": "legible" }  (HTTP 400/401/500)
 ///
@@ -112,11 +150,17 @@ impl ApiBackend {
 
 #[cfg(target_os = "android")]
 impl AgentBackend for ApiBackend {
-    fn process(&self, input: &str) -> Result<AgentResponse, AgentError> {
+    fn process(
+        &self,
+        input: &str,
+        history: &[ChatMessage],
+    ) -> Result<AgentResponse, AgentError> {
         let trimmed = input.trim();
         if trimmed.is_empty() {
             return Err(AgentError::EmptyInput);
         }
+
+        let body = build_request_body(trimmed, history);
 
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(90))
@@ -126,7 +170,7 @@ impl AgentBackend for ApiBackend {
         let response = client
             .post(format!("{}/api/agent/run", self.base_url))
             .header("X-Agent-Token", &self.token)
-            .json(&serde_json::json!({ "query": trimmed }))
+            .json(&body)
             .send()
             .map_err(|e| Self::describe_error(&e))?;
 
@@ -136,6 +180,49 @@ impl AgentBackend for ApiBackend {
             .map_err(|_| AgentError::Api(format!("la API respondió {http_status} con un cuerpo no JSON")))?;
 
         parse_api_response(http_status, &body, trimmed)
+    }
+}
+
+/// Construye el body JSON que se envía a la API.
+///
+/// Función PURA (sin red): permite cubrir con `cargo test` en escritorio
+/// que el contrato con el servidor se respeta (campos, orden del historial,
+/// filtrado de roles inválidos, límite de 10 turnos).
+pub fn build_request_body(input: &str, history: &[ChatMessage]) -> serde_json::Value {
+    // Filtra roles inválidos y se queda con los últimos 10 (igual que el servidor).
+    let filtered: Vec<&ChatMessage> = history.iter().filter(|m| m.is_valid_role()).collect();
+    let last_n = if filtered.len() > 10 {
+        &filtered[filtered.len() - 10..]
+    } else {
+        &filtered[..]
+    };
+    let clean: Vec<serde_json::Value> = last_n
+        .iter()
+        .map(|m| serde_json::json!({ "role": m.role, "content": m.content }))
+        .collect();
+
+    serde_json::json!({
+        "query": input,
+        "history": clean,
+    })
+}
+
+/// Parsea un JSON string (recibido por JNI desde Kotlin) a `Vec<ChatMessage>`.
+///
+/// - Acepta `[]`, `[...]` o un string vacío (→ vacío).
+/// - Descarta entradas cuyo `role` no sea `"user"` / `"assistant"`.
+/// - Descarta entradas cuyo `content` no sea string.
+/// - Nunca entra en pánico: ante cualquier fallo devuelve historial vacío
+///   (la llamada sigue siendo válida, solo sin memoria).
+pub fn parse_history_json(json: &str) -> Vec<ChatMessage> {
+    let trimmed = json.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    let parsed: Result<Vec<ChatMessage>, _> = serde_json::from_str(trimmed);
+    match parsed {
+        Ok(list) => list.into_iter().filter(|m| m.is_valid_role()).collect(),
+        Err(_) => Vec::new(),
     }
 }
 
@@ -194,10 +281,10 @@ impl<B: AgentBackend> AgentCore<B> {
         Self { backend }
     }
 
-    /// Ejecuta la consulta y devuelve SIEMPRE un JSON en string
+    /// Ejecuta la consulta con historial y devuelve SIEMPRE un JSON en string
     /// (de éxito o de error), listo para cruzar el puente JNI hacia Kotlin.
-    pub fn run(&self, input: &str) -> String {
-        let response = match self.backend.process(input) {
+    pub fn run(&self, input: &str, history: &[ChatMessage]) -> String {
+        let response = match self.backend.process(input, history) {
             Ok(resp) => resp,
             Err(err) => AgentResponse {
                 status: "error".to_string(),
@@ -224,7 +311,7 @@ mod tests {
 
     fn run(input: &str) -> Value {
         let core = AgentCore::new(SimulatedBackend);
-        serde_json::from_str(&core.run(input)).expect("run() debe devolver JSON válido")
+        serde_json::from_str(&core.run(input, &[])).expect("run() debe devolver JSON válido")
     }
 
     #[test]
@@ -273,6 +360,19 @@ mod tests {
     }
 
     #[test]
+    fn el_simulado_ignora_el_historial() {
+        let core = AgentCore::new(SimulatedBackend);
+        let history = vec![
+            ChatMessage::user("hola"),
+            ChatMessage::assistant("buenas"),
+        ];
+        let json: Value =
+            serde_json::from_str(&core.run("otra pregunta", &history)).unwrap();
+        assert_eq!(json["status"], "ok");
+        assert_eq!(json["input"], "otra pregunta");
+    }
+
+    #[test]
     fn parse_api_ok_extrae_result_y_eco() {
         let body = serde_json::json!({"status": "ok", "result": "Hola, soy GLM", "engine": "glm"});
         let resp = parse_api_response(200, &body, "¿quién eres?").expect("debe ser ok");
@@ -303,5 +403,103 @@ mod tests {
         let err = parse_api_response(500, &body, "x").expect_err("debe ser error");
         assert!(err.message().contains("500"));
         assert!(err.message().contains("vacía"));
+    }
+
+    // --- Tests del historial (memoria de conversación) ---
+
+    #[test]
+    fn build_body_sin_historial_lleva_array_vacio() {
+        let body = build_request_body("hola", &[]);
+        assert_eq!(body["query"], "hola");
+        assert_eq!(body["history"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn build_body_incluye_historial_en_orden() {
+        let history = vec![
+            ChatMessage::user("¿quién eres?"),
+            ChatMessage::assistant("Soy GLM"),
+            ChatMessage::user("¿y qué sabes hacer?"),
+        ];
+        let body = build_request_body("otra cosa", &history);
+        assert_eq!(body["query"], "otra cosa");
+        let arr = body["history"].as_array().expect("history es array");
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr[0]["role"], "user");
+        assert_eq!(arr[0]["content"], "¿quién eres?");
+        assert_eq!(arr[2]["content"], "¿y qué sabes hacer?");
+    }
+
+    #[test]
+    fn build_body_filtra_roles_invalidos() {
+        let history = vec![
+            ChatMessage::user("ok"),
+            ChatMessage {
+                role: "system".to_string(),
+                content: "no debería pasar".to_string(),
+            },
+            ChatMessage::assistant("ok resp"),
+        ];
+        let body = build_request_body("x", &history);
+        let arr = body["history"].as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["role"], "user");
+        assert_eq!(arr[1]["role"], "assistant");
+    }
+
+    #[test]
+    fn build_body_trunca_a_10_ultimos() {
+        let history: Vec<ChatMessage> = (0..15)
+            .map(|i| {
+                if i % 2 == 0 {
+                    ChatMessage::user(format!("u{i}"))
+                } else {
+                    ChatMessage::assistant(format!("a{i}"))
+                }
+            })
+            .collect();
+        let body = build_request_body("fin", &history);
+        let arr = body["history"].as_array().unwrap();
+        assert_eq!(arr.len(), 10);
+        // Los últimos 10 son los índices 5..15.
+        // Índice 5 (impar) → assistant "a5"; índice 14 (par) → user "u14".
+        assert_eq!(arr[0]["content"], "a5");
+        assert_eq!(arr[9]["content"], "u14");
+    }
+
+    #[test]
+    fn parse_history_json_vacio_es_vec_vacio() {
+        assert!(parse_history_json("").is_empty());
+        assert!(parse_history_json("   ").is_empty());
+        assert!(parse_history_json("[]").is_empty());
+    }
+
+    #[test]
+    fn parse_history_json_valido_recupera_mensajes() {
+        let json = r#"[
+            {"role":"user","content":"hola"},
+            {"role":"assistant","content":"buenas"}
+        ]"#;
+        let list = parse_history_json(json);
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0], ChatMessage::user("hola"));
+        assert_eq!(list[1], ChatMessage::assistant("buenas"));
+    }
+
+    #[test]
+    fn parse_history_json_descarta_roles_invalidos() {
+        let json = r#"[
+            {"role":"user","content":"ok"},
+            {"role":"tool","content":"no"},
+            {"role":"assistant","content":"ok resp"}
+        ]"#;
+        let list = parse_history_json(json);
+        assert_eq!(list.len(), 2);
+    }
+
+    #[test]
+    fn parse_history_json_json_invalido_devuelve_vacio() {
+        assert!(parse_history_json("no es json").is_empty());
+        assert!(parse_history_json("{broken").is_empty());
     }
 }

@@ -3,12 +3,19 @@ package com.example.agentnative
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -19,12 +26,15 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -43,17 +53,25 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun AgentScreen(viewModel: AgentViewModel = viewModel()) {
+fun AgentScreen(viewModel: AgentViewModelContract = viewModel<AgentViewModel>()) {
     val state by viewModel.state.collectAsState()
+    val history by viewModel.history.collectAsState()
     var query by remember { mutableStateOf("") }
     var showSettings by remember { mutableStateOf(false) }
     var urlField by remember { mutableStateOf(viewModel.getApiUrl()) }
     var tokenField by remember { mutableStateOf(viewModel.getApiToken()) }
+    val listState = rememberLazyListState()
+
+    // Auto-scroll al final cuando llega un mensaje nuevo o cambia el estado.
+    LaunchedEffect(history.size, state) {
+        if (history.isNotEmpty()) {
+            listState.animateScrollToItem(history.size - 1)
+        }
+    }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
@@ -67,6 +85,46 @@ fun AgentScreen(viewModel: AgentViewModel = viewModel()) {
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
+        // --- Lista de conversación (memoria visible) ---
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            if (history.isEmpty()) {
+                Text(
+                    text = "Aún no hay mensajes. Escribe una consulta y pulsa «Ejecutar agente».",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(16.dp)
+                )
+            } else {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(history) { msg ->
+                        MessageBubble(msg)
+                    }
+                    if (state is UiState.Running) {
+                        item {
+                            Text(
+                                text = "· · ·  pensando",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 12.dp, top = 4.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
@@ -75,41 +133,30 @@ fun AgentScreen(viewModel: AgentViewModel = viewModel()) {
             minLines = 2
         )
 
-        Button(
-            onClick = { viewModel.runQuery(query) },
-            enabled = query.isNotBlank() && state !is UiState.Running,
-            modifier = Modifier.fillMaxWidth()
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text("Ejecutar agente")
+            Button(
+                onClick = {
+                    viewModel.runQuery(query)
+                    query = ""
+                },
+                enabled = query.isNotBlank() && state !is UiState.Running,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Ejecutar agente")
+            }
+            OutlinedButton(
+                onClick = { viewModel.clearHistory() },
+                enabled = history.isNotEmpty() && state !is UiState.Running,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Limpiar")
+            }
         }
 
-        Text(
-            text = "Estado: ${state.label()}",
-            style = MaterialTheme.typography.titleMedium,
-            color = when (state) {
-                is UiState.Running -> MaterialTheme.colorScheme.tertiary
-                is UiState.Success -> MaterialTheme.colorScheme.primary
-                is UiState.Error -> MaterialTheme.colorScheme.error
-                UiState.Idle -> MaterialTheme.colorScheme.onSurfaceVariant
-            }
-        )
-
         when (val current = state) {
-            is UiState.Success -> {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    SelectionContainer {
-                        Text(
-                            text = current.response,
-                            fontFamily = FontFamily.Monospace,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(12.dp)
-                        )
-                    }
-                }
-            }
-
             is UiState.Error -> {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Text(
@@ -122,14 +169,7 @@ fun AgentScreen(viewModel: AgentViewModel = viewModel()) {
                     )
                 }
             }
-
-            else -> {
-                Text(
-                    text = "Configura la URL y el token en «Ajustes» la primera vez.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+            else -> Unit
         }
 
         // ------------------------------------------------------------------
@@ -145,7 +185,9 @@ fun AgentScreen(viewModel: AgentViewModel = viewModel()) {
         if (showSettings) {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(
-                    modifier = Modifier.padding(12.dp),
+                    modifier = Modifier
+                        .verticalScroll(rememberScrollState())
+                        .padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     OutlinedTextField(
@@ -175,6 +217,39 @@ fun AgentScreen(viewModel: AgentViewModel = viewModel()) {
                     }
                 }
             }
+        }
+    }
+}
+
+/** Burbuja de mensaje: alineación + color según rol. */
+@Composable
+private fun MessageBubble(msg: ChatMessage) {
+    val isUser = msg.role == "user"
+    val bg = if (isUser) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.secondaryContainer
+    }
+    val fg = if (isUser) {
+        MaterialTheme.colorScheme.onPrimary
+    } else {
+        MaterialTheme.colorScheme.onSecondaryContainer
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+    ) {
+        SelectionContainer {
+            Text(
+                text = msg.content,
+                color = fg,
+                style = MaterialTheme.typography.bodyMedium,
+                fontFamily = if (isUser) FontFamily.Default else FontFamily.Monospace,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(bg)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            )
         }
     }
 }

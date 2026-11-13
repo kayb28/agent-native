@@ -190,3 +190,14 @@ empieza limpia (sin memoria de esta sesión); la API no tiene acceso a tus archi
 4. **Tests de UI:** Compose UI test del flujo TextField → botón → respuesta.
 5. **CI más rápida:** cachear también la instalación de `cargo-ndk` (hoy se recompila en cada run, ~2 min).
 6. **Servidor propio:** dominio fijo + HTTPS real para no depender del sandbox de preview.
+
+## Estado de los próximos pasos
+
+| # | Tarea | Estado | Dónde |
+|---|---|---|---|
+| 1 | Memoria de conversación | ✅ HECHO | `rust-core/src/agent.rs` (trait con `history`, `build_request_body`, `parse_history_json`), `jni_bridge.rs` (param `historyJson`), `AgentViewModel.kt` (mantiene historial), `MainActivity.kt` (chat con burbujas) |
+| 2 | Splits por ABI | ✅ HECHO | `android/app/build.gradle.kts` (`splits.abi`) + CI sube APKs por ABI como artifact separado |
+| 3 | Firma release | ✅ HECHO | `android/app/build.gradle.kts` (`signingConfigs` desde env vars), CI job `release` (tags `v*`), `scripts/generate_keystore.sh` |
+| 4 | Tests de UI | ✅ HECHO | `android/app/src/androidTest/.../AgentScreenUiTest.kt` (4 tests), CI job `ui-test` con emulador |
+| 5 | Cachear cargo-ndk | ✅ HECHO | `.github/workflows/android-rust-build.yml` (cache + install condicional) |
+| 6 | Servidor propio | ✅ HECHO | `server/` (Express + Dockerfile + fly.toml + README con guía Fly.io/Render/Railway) |

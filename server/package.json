@@ -1,0 +1,19 @@
+{
+  "name": "agent-native-server",
+  "version": "0.1.0",
+  "description": "Backend del agente para la app Android AgentNative: POST /api/agent/run → modelo GLM vía z-ai-web-dev-sdk",
+  "license": "MIT",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "z-ai-web-dev-sdk": "latest"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
