@@ -84,7 +84,7 @@ jobs:
       # Criterio de aceptación nº 4 (visible en el log): el APK contiene libagent_core.so.
       - name: Verify .so inside APK
         run: |
-          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          APK=android/app/build/outputs/apk/debug/app-universal-debug.apk
           unzip -l "$APK" | grep -E 'lib/.*libagent_core\.so'
           echo "== ABIs empaquetadas (universal) =="
 
@@ -97,7 +97,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: agent-native-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: android/app/build/outputs/apk/debug/app-universal-debug.apk
           if-no-files-found: error
 
       - name: Upload per-ABI APKs artifact
@@ -286,7 +286,7 @@ jobs:
 
       - name: Verify APK signature
         run: |
-          APK=android/app/build/outputs/apk/release/app-release.apk
+          APK=android/app/build/outputs/apk/release/app-universal-release.apk
           ls -lh "$APK"
           # Verificación de v2+ vía apksigner (lo trae el build-tools del SDK).
           # Si no está en PATH, se imprime solo el tamaño y se continúa.
@@ -301,7 +301,7 @@ jobs:
         with:
           name: agent-native-release-apk
           path: |
-            android/app/build/outputs/apk/release/app-release.apk
+            android/app/build/outputs/apk/release/app-universal-release.apk
             android/app/build/outputs/apk/release/app-arm64-v8a-release.apk
             android/app/build/outputs/apk/release/app-armeabi-v7a-release.apk
             android/app/build/outputs/apk/release/app-x86_64-release.apk
@@ -311,7 +311,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            android/app/build/outputs/apk/release/app-release.apk
+            android/app/build/outputs/apk/release/app-universal-release.apk
             android/app/build/outputs/apk/release/app-arm64-v8a-release.apk
             android/app/build/outputs/apk/release/app-armeabi-v7a-release.apk
             android/app/build/outputs/apk/release/app-x86_64-release.apk

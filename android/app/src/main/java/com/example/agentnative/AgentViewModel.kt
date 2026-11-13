@@ -57,17 +57,17 @@ class AgentViewModel(application: Application) : AndroidViewModel(application), 
     private val prefs = application.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     private val _state = MutableStateFlow<UiState>(UiState.Idle)
-    val state: StateFlow<UiState> = _state.asStateFlow()
+    override val state: StateFlow<UiState> = _state.asStateFlow()
 
     /** Historial de la conversación actual (vivo en memoria; se borra al cerrar la app). */
     private val _history = MutableStateFlow<List<ChatMessage>>(emptyList())
-    val history: StateFlow<List<ChatMessage>> = _history.asStateFlow()
+    override val history: StateFlow<List<ChatMessage>> = _history.asStateFlow()
 
     /** URL y token guardados en el dispositivo (nunca en el código). */
-    fun getApiUrl(): String = prefs.getString(KEY_URL, "") ?: ""
-    fun getApiToken(): String = prefs.getString(KEY_TOKEN, "") ?: ""
+    override fun getApiUrl(): String = prefs.getString(KEY_URL, "") ?: ""
+    override fun getApiToken(): String = prefs.getString(KEY_TOKEN, "") ?: ""
 
-    fun saveSettings(url: String, token: String) {
+    override fun saveSettings(url: String, token: String) {
         prefs.edit()
             .putString(KEY_URL, url.trim())
             .putString(KEY_TOKEN, token.trim())
@@ -75,7 +75,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application), 
     }
 
     /** Borra el historial en memoria (la API no guarda estado entre sesiones). */
-    fun clearHistory() {
+    override fun clearHistory() {
         _history.value = emptyList()
         _state.value = UiState.Idle
     }
@@ -87,7 +87,7 @@ class AgentViewModel(application: Application) : AndroidViewModel(application), 
      * Tras una respuesta exitosa, añade el par (user, assistant) al historial
      * para que la siguiente llamada lleve memoria de conversación.
      */
-    fun runQuery(input: String) {
+    override fun runQuery(input: String) {
         if (_state.value is UiState.Running) return
 
         val url = getApiUrl()
